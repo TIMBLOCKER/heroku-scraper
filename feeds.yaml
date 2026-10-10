@@ -1,0 +1,105 @@
+feeds:
+  - publisher: heise - IT
+    feed_url: https://www.heise.de/rss/heise-Rubrik-IT-atom.xml
+    language: de
+    enabled: true
+
+  - publisher: heise - Netzpolitik
+    feed_url: https://www.heise.de/rss/heise-Rubrik-Netzpolitik-atom.xml
+    language: de
+    enabled: true
+
+  - publisher: heise plus
+    feed_url: https://www.heise.de/rss/heiseplus-atom.xml
+    language: de
+    enabled: true
+
+  - publisher: Golem - Atom
+    feed_url: https://rss.golem.de/rss.php?feed=ATOM1.0
+    language: de
+    enabled: true
+
+  - publisher: Golem - RSS
+    feed_url: https://rss.golem.de/rss.php?feed=RSS2.0
+    language: de
+    enabled: true
+
+  - publisher: Chip - Komplett
+    feed_url: https://www.chip.de/rss/chip_komplett.xml
+    language: de
+    enabled: true
+
+  - publisher: Chip - News
+    feed_url: https://www.chip.de/rss/rss_ssh_news.xml
+    language: de
+    enabled: true
+
+  - publisher: ComputerBase - News
+    feed_url: https://www.computerbase.de/rss/news.xml
+    language: de
+    enabled: true
+
+  - publisher: ComputerBase - Artikel
+    feed_url: https://www.computerbase.de/rss/artikel.xml
+    language: de
+    enabled: true
+
+  - publisher: Computer Bild
+    feed_url: https://www.computerbild.de/rssfeed_2261.html?node=10
+    language: de
+    enabled: true
+
+  - publisher: PC Welt
+    feed_url: https://www.pcwelt.de/feed?story_types=news,feature
+    language: de
+    enabled: true
+
+  - publisher: Netzwelt
+    feed_url: https://feeds.feedburner.com/netzwelt
+    language: de
+    enabled: true
+
+  - publisher: WinFuture
+    feed_url: https://static.winfuture.de/feeds/WinFuture-News-rss2.0.xml
+    language: de
+    enabled: true
+
+  - publisher: it-business
+    feed_url: https://www.it-business.de/rss/news.xml
+    language: de
+    enabled: true
+
+  - publisher: Hacker News - Newest
+    feed_url: https://hnrss.org/newest
+    language: en
+    enabled: true
+
+  - publisher: Ars Technica - Index
+    feed_url: https://feeds.arstechnica.com/arstechnica/index
+    language: en
+    enabled: true
+
+  - publisher: t3n
+    feed_url: https://t3n.de/rss.xml
+    language: de
+    enabled: true
+
+  - publisher: TechCrunch
+    feed_url: https://techcrunch.com/feed/
+    language: en
+    enabled: true
+
+  - publisher: Computer Weekly - All Content
+    feed_url: https://www.computerweekly.com/rss/All-Computer-Weekly-content.xml
+    language: en
+    enabled: true
+
+  - publisher: Wired - RSS
+    feed_url: https://www.wired.com/feed/rss
+    language: en
+    enabled: true
+
+  - publisher: The Decoder - Deutsch
+    feed_url: https://the-decoder.de/feed/
+    language: de
+    enabled: true
