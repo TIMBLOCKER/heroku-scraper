@@ -9,7 +9,6 @@ import yaml
 
 class Config:
     DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://postgres:postgres@localhost:5432/app")
-    DB_PASSWORD = os.getenv("DB_PASSWORD", "")
     TABLE_NAME = os.getenv("TABLE_NAME", "rss_articles")
     FEEDS_FILE = Path(os.getenv("FEEDS_FILE", "feeds.yaml"))
 
@@ -18,16 +17,13 @@ class RSSJob:
     def __init__(self):
         dsn = Config.DATABASE_URL
         if not dsn:
-            user = os.getenv("DB_USER", "postgres")
-            host = os.getenv("DB_HOST", "localhost")
-            port = os.getenv("DB_PORT", "5432")
-            name = os.getenv("DB_NAME", "app")
-            dsn = f"postgresql://{user}:{Config.DB_PASSWORD}@{host}:{port}/{name}"
-        self.conn = psycopg2.connect(dsn)
+            raise RuntimeError("DATABASE_URL is not set")
+        self.conn = psycopg2.connect(dsn, sslmode="require")
         self.conn.autocommit = True
 
     def ensure_table(self):
         with self.conn.cursor() as cur:
+            cur.execute("CREATE EXTENSION IF NOT EXISTS vector;")
             cur.execute(
                 f"""
                 CREATE TABLE IF NOT EXISTS {Config.TABLE_NAME} (
@@ -38,13 +34,14 @@ class RSSJob:
                     published_at TIMESTAMPTZ,
                     embedding_status BOOLEAN NOT NULL DEFAULT FALSE,
                     success BOOLEAN NOT NULL,
+                    embedding vector(1536),
                     title TEXT,
                     content TEXT
                 );
                 """
             )
 
-    def insert_article(self, article):
+    def upsert_article(self, article):
         with self.conn.cursor() as cur:
             cur.execute(
                 f"""
@@ -55,15 +52,17 @@ class RSSJob:
                     published_at,
                     embedding_status,
                     success,
+                    embedding,
                     title,
                     content
-                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
                 ON CONFLICT (canonical_url) DO UPDATE SET
                     publisher = EXCLUDED.publisher,
                     fetched_at = EXCLUDED.fetched_at,
                     published_at = EXCLUDED.published_at,
                     embedding_status = EXCLUDED.embedding_status,
                     success = EXCLUDED.success,
+                    embedding = EXCLUDED.embedding,
                     title = EXCLUDED.title,
                     content = EXCLUDED.content;
                 """,
@@ -74,6 +73,7 @@ class RSSJob:
                     article["published_at"],
                     article["embedding_status"],
                     article["success"],
+                    article.get("embedding"),
                     article["title"],
                     article["content"],
                 ),
@@ -83,13 +83,13 @@ class RSSJob:
         self.conn.close()
 
 
-def _to_text(value):
+def _text(value):
     if value is None:
         return ""
     if isinstance(value, (list, tuple)):
-        return " ".join(_to_text(v) for v in value if v)
+        return " ".join(_text(v) for v in value if v)
     if isinstance(value, dict):
-        return _to_text(value.get("value") or value.get("title") or "")
+        return _text(value.get("value") or value.get("title") or "")
     return str(value)
 
 
@@ -103,7 +103,7 @@ def _parse_date(entry, key):
         return None
 
 
-def _article_from_entry(publisher, entry):
+def article_from_entry(publisher, entry):
     link = entry.get("link") or entry.get("id") or ""
     if not link:
         return None
@@ -112,13 +112,9 @@ def _article_from_entry(publisher, entry):
     if not published_at:
         published_at = datetime.now(timezone.utc)
 
-    content = _to_text(
-        entry.get("summary")
-        or entry.get("summary_detail")
-        or entry.get("content")
-        or ""
-    )
-    title = _to_text(entry.get("title") or "")
+    content_value = entry.get("summary") or entry.get("summary_detail") or entry.get("content") or ""
+    title = _text(entry.get("title") or "")
+    content = _text(content_value)
 
     return {
         "publisher": publisher,
@@ -127,6 +123,7 @@ def _article_from_entry(publisher, entry):
         "published_at": published_at,
         "embedding_status": False,
         "success": True,
+        "embedding": None,
         "title": title,
         "content": content,
     }
@@ -142,7 +139,6 @@ def main():
     job = RSSJob()
     try:
         job.ensure_table()
-
         for item in load_feeds(Config.FEEDS_FILE):
             if not item.get("enabled"):
                 continue
@@ -161,11 +157,11 @@ def main():
                 continue
 
             for entry in getattr(feed, "entries", []) or []:
-                article = _article_from_entry(publisher, entry)
+                article = article_from_entry(publisher, entry)
                 if not article:
                     continue
                 try:
-                    job.insert_article(article)
+                    job.upsert_article(article)
                 except Exception:
                     continue
     finally:
