@@ -1,9 +1,13 @@
 import os
+import re
 from datetime import datetime, timezone
+from html.parser import HTMLParser
 from pathlib import Path
 
 import feedparser
 import psycopg2
+import requests
+import trafilatura
 import yaml
 
 
@@ -40,6 +44,12 @@ class RSSJob:
                 );
                 """
             )
+            cur.execute(
+                f"ALTER TABLE {Config.TABLE_NAME} ADD COLUMN IF NOT EXISTS article_language TEXT;"
+            )
+            cur.execute(
+                f"ALTER TABLE {Config.TABLE_NAME} ADD COLUMN IF NOT EXISTS content_scraped TEXT;"
+            )
 
     def upsert_article(self, article):
         with self.conn.cursor() as cur:
@@ -54,8 +64,10 @@ class RSSJob:
                     success,
                     embedding,
                     title,
-                    content
-                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    content,
+                    article_language,
+                    content_scraped
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 ON CONFLICT (canonical_url) DO UPDATE SET
                     publisher = EXCLUDED.publisher,
                     fetched_at = EXCLUDED.fetched_at,
@@ -64,7 +76,9 @@ class RSSJob:
                     success = EXCLUDED.success,
                     embedding = EXCLUDED.embedding,
                     title = EXCLUDED.title,
-                    content = EXCLUDED.content;
+                    content = EXCLUDED.content,
+                    article_language = EXCLUDED.article_language,
+                    content_scraped = EXCLUDED.content_scraped;
                 """,
                 (
                     article["publisher"],
@@ -76,6 +90,8 @@ class RSSJob:
                     article.get("embedding"),
                     article["title"],
                     article["content"],
+                    article["article_language"],
+                    article.get("content_scraped"),
                 ),
             )
 
@@ -103,6 +119,98 @@ def _parse_date(entry, key):
         return None
 
 
+class _HTMLTextExtractor(HTMLParser):
+    def __init__(self):
+        super().__init__()
+        self.parts = []
+
+    def handle_data(self, data):
+        if data:
+            self.parts.append(data)
+
+    def text(self):
+        return " ".join(self.parts)
+
+
+def _strip_html(value):
+    if not value:
+        return ""
+    parser = _HTMLTextExtractor()
+    parser.feed(value)
+    parser.close()
+    cleaned = parser.text()
+    return re.sub(r"\s+", " ", cleaned).strip()
+
+
+def _detect_language(text):
+    sample = (text or "").lower()
+    if not sample:
+        return "en"
+    de_markers = (" der ", " die ", " und ", " ist ", " nicht ", " mit ", " auf ")
+    en_markers = (" the ", " and ", " is ", " not ", " with ", " for ", " on ")
+    de_score = sum(sample.count(marker) for marker in de_markers)
+    en_score = sum(sample.count(marker) for marker in en_markers)
+    return "de" if de_score >= en_score else "en"
+
+
+def _is_blocked_or_paywalled(text):
+    haystack = (text or "").lower()
+    phrases = (
+        "captcha",
+        "zugriff verweigert",
+        "access denied",
+        "human verification",
+        "verify you are human",
+        "subscribe to continue",
+        "abo",
+        "anmelden, um weiterzulesen",
+        "paywall",
+        "cookie einstellungen",
+    )
+    return any(p in haystack for p in phrases)
+
+
+def _is_plausible_article(result):
+    text = (result.get("text") or "").strip()
+    title = (result.get("title") or "").strip()
+    paragraphs = [p.strip() for p in re.split(r"\n+", text) if p.strip()]
+    if not title or len(title) < 8:
+        return False
+    if len(text) < 800:
+        return False
+    if len(paragraphs) < 3:
+        return False
+    if _is_blocked_or_paywalled(text):
+        return False
+    return True
+
+
+def _extract_canonical_content(url):
+    result = {"success": False, "content_scraped": None}
+    if not url:
+        return result
+    try:
+        response = requests.get(url, timeout=20, allow_redirects=True, headers={"User-Agent": "rss-scraper/1.0"})
+        content_type = (response.headers.get("Content-Type") or "").lower()
+        if response.status_code >= 400 or "text/html" not in content_type:
+            return result
+        downloaded = trafilatura.fetch_url(response.url)
+        if not downloaded:
+            return result
+        extracted = trafilatura.extract(downloaded, include_comments=False, include_formatting=False)
+        metadata = trafilatura.extract_metadata(downloaded)
+        text = _strip_html(extracted or "")
+        title = _strip_html(metadata.title if metadata else "")
+        article_result = {"title": title, "text": text}
+        if not _is_plausible_article(article_result):
+            return result
+        result["success"] = True
+        result["content_scraped"] = text
+        return result
+    except Exception:
+        return result
+
+
 def article_from_entry(publisher, entry):
     link = entry.get("link") or entry.get("id") or ""
     if not link:
@@ -114,7 +222,10 @@ def article_from_entry(publisher, entry):
 
     content_value = entry.get("summary") or entry.get("summary_detail") or entry.get("content") or ""
     title = _text(entry.get("title") or "")
-    content = _text(content_value)
+    content = _strip_html(_text(content_value))
+    article_language = _detect_language(f"{title} {content}")
+    scraped = _extract_canonical_content(link)
+    success = scraped["success"]
 
     return {
         "publisher": publisher,
@@ -122,10 +233,12 @@ def article_from_entry(publisher, entry):
         "fetched_at": datetime.now(timezone.utc),
         "published_at": published_at,
         "embedding_status": False,
-        "success": True,
+        "success": success,
         "embedding": None,
         "title": title,
         "content": content,
+        "article_language": article_language,
+        "content_scraped": scraped["content_scraped"],
     }
 
 
