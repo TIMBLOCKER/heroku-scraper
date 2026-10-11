@@ -38,7 +38,7 @@ class RSSJob:
                     published_at TIMESTAMPTZ,
                     embedding_status BOOLEAN NOT NULL DEFAULT FALSE,
                     success BOOLEAN NOT NULL,
-                    embedding vector(1536),
+                    embedding vector(4096),
                     title TEXT,
                     content TEXT
                 );
@@ -49,6 +49,27 @@ class RSSJob:
             )
             cur.execute(
                 f"ALTER TABLE {Config.TABLE_NAME} ADD COLUMN IF NOT EXISTS content_scraped TEXT;"
+            )
+            cur.execute(
+                f"""
+                DO $$
+                BEGIN
+                    IF EXISTS (
+                        SELECT 1
+                        FROM information_schema.columns
+                        WHERE table_name = %s
+                          AND column_name = 'embedding'
+                          AND udt_name = '_vector'
+                    ) THEN
+                        BEGIN
+                            EXECUTE format('ALTER TABLE %I ALTER COLUMN embedding TYPE vector(4096);', %s);
+                        EXCEPTION WHEN OTHERS THEN
+                            NULL;
+                        END;
+                    END IF;
+                END $$;
+                """,
+                (Config.TABLE_NAME, Config.TABLE_NAME),
             )
 
     def upsert_article(self, article):
