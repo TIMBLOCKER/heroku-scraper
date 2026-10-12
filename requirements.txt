@@ -1,5 +1,0 @@
-feedparser>=6.0.0
-psycopg2-binary>=2.9.9
-PyYAML>=6.0.0
-requests>=2.32.0
-trafilatura>=1.12.0

@@ -22,7 +22,8 @@ class RSSJob:
         dsn = Config.DATABASE_URL
         if not dsn:
             raise RuntimeError("DATABASE_URL is not set")
-        self.conn = psycopg2.connect(dsn, sslmode="require")
+        sslmode = "require" if "heroku" in dsn.lower() else "prefer"
+        self.conn = psycopg2.connect(dsn, sslmode=sslmode)
         self.conn.autocommit = True
 
     def ensure_table(self):
@@ -228,7 +229,8 @@ def _extract_canonical_content(url):
         result["success"] = True
         result["content_scraped"] = text
         return result
-    except Exception:
+    except Exception as exc:
+        print(f"[WARN] canonical scrape failed for {url}: {exc}")
         return result
 
 
@@ -280,24 +282,30 @@ def main():
             publisher = item.get("publisher", "")
             feed_url = item.get("feed_url")
             if not feed_url:
+                print(f"[WARN] feed without URL for publisher '{publisher}'")
                 continue
 
             try:
                 feed = feedparser.parse(feed_url)
-            except Exception:
+            except Exception as exc:
+                print(f"[ERROR] failed to parse feed {feed_url}: {exc}")
                 continue
 
             if getattr(feed, "bozo", False):
+                print(f"[WARN] malformed feed skipped: {feed_url}")
                 continue
 
             for entry in getattr(feed, "entries", []) or []:
                 article = article_from_entry(publisher, entry)
                 if not article:
+                    print(f"[WARN] invalid entry skipped for feed: {feed_url}")
                     continue
                 try:
                     job.upsert_article(article)
-                except Exception:
-                    continue
+                except Exception as exc:
+                    print(
+                        f"[ERROR] DB upsert failed for URL '{article.get('canonical_url', '<unknown>')}': {exc}"
+                    )
     finally:
         job.close()
 
