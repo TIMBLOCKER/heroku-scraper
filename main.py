@@ -255,10 +255,10 @@ def _is_plausible_article(result):
     reasons = []
     if not title or len(title) < 8:
         reasons.append("title-too-short")
-    if len(text) < 800:
+    if len(text) < 500:
         reasons.append("text-too-short")
-    if len(paragraphs) < 3:
-        reasons.append("too-few-paragraphs")
+    #if len(paragraphs) < 3:
+    #    reasons.append("too-few-paragraphs")
     if _is_blocked_or_paywalled(text):
         reasons.append("blocked-or-paywalled")
     return len(reasons) == 0, reasons
