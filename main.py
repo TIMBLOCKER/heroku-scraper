@@ -117,6 +117,69 @@ class RSSJob:
                 ),
             )
 
+    def rescrape_and_update_articles_before(self, cutoff_dt):
+        """
+        One-off migration helper:
+        Re-scrapes and updates all rows with fetched_at < cutoff_dt in one DB transaction.
+        """
+        old_autocommit = self.conn.autocommit
+        self.conn.autocommit = False
+        try:
+            with self.conn.cursor() as cur:
+                cur.execute(
+                    f"""
+                    SELECT id, publisher, canonical_url, published_at
+                    FROM {Config.TABLE_NAME}
+                    WHERE fetched_at < %s
+                    ORDER BY fetched_at ASC;
+                    """,
+                    (cutoff_dt,),
+                )
+                rows = cur.fetchall()
+
+            for row_id, publisher, canonical_url, published_at in rows:
+                scraped = _extract_canonical_content(canonical_url)
+                content_scraped = scraped["content_scraped"]
+                success = scraped["success"]
+                title = ""
+                content = ""
+                if content_scraped:
+                    title = _strip_html(content_scraped[:160])
+                    content = content_scraped
+                article_language = _detect_language(f"{title} {content}")
+
+                with self.conn.cursor() as cur:
+                    cur.execute(
+                        f"""
+                        UPDATE {Config.TABLE_NAME}
+                        SET
+                            fetched_at = %s,
+                            success = %s,
+                            title = %s,
+                            content = %s,
+                            article_language = %s,
+                            content_scraped = %s
+                        WHERE id = %s;
+                        """,
+                        (
+                            datetime.now(timezone.utc),
+                            success,
+                            title,
+                            content,
+                            article_language,
+                            content_scraped,
+                            row_id,
+                        ),
+                    )
+
+            self.conn.commit()
+            print(f"[INFO] One-off rescrape completed. Updated rows: {len(rows)}")
+        except Exception:
+            self.conn.rollback()
+            raise
+        finally:
+            self.conn.autocommit = old_autocommit
+
     def close(self):
         self.conn.close()
 
@@ -275,6 +338,14 @@ def main():
     job = RSSJob()
     try:
         job.ensure_table()
+        # ONE-OFF BACKFILL (run once, then comment this block out):
+        # This atomically re-scrapes all entries with fetched_at before 2026-10-12 UTC
+        # and updates: fetched_at, success, title, content, article_language, content_scraped.
+        #
+        # After the one-time run is done successfully, comment out or remove the next two lines.
+        one_off_cutoff = datetime(2026, 10, 12, tzinfo=timezone.utc)
+        job.rescrape_and_update_articles_before(one_off_cutoff)
+
         for item in load_feeds(Config.FEEDS_FILE):
             if not item.get("enabled"):
                 continue
