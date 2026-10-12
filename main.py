@@ -63,7 +63,7 @@ class RSSJob:
                           AND udt_name = '_vector'
                     ) THEN
                         BEGIN
-                            EXECUTE format('ALTER TABLE %I ALTER COLUMN embedding TYPE vector(4096);', %s);
+                            EXECUTE format('ALTER TABLE %%I ALTER COLUMN embedding TYPE vector(4096);', %s);
                         EXCEPTION WHEN OTHERS THEN
                             NULL;
                         END;
