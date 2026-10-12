@@ -252,15 +252,16 @@ def _is_plausible_article(result):
     text = (result.get("text") or "").strip()
     title = (result.get("title") or "").strip()
     paragraphs = [p.strip() for p in re.split(r"\n+", text) if p.strip()]
+    reasons = []
     if not title or len(title) < 8:
-        return False
+        reasons.append("title-too-short")
     if len(text) < 800:
-        return False
+        reasons.append("text-too-short")
     if len(paragraphs) < 3:
-        return False
+        reasons.append("too-few-paragraphs")
     if _is_blocked_or_paywalled(text):
-        return False
-    return True
+        reasons.append("blocked-or-paywalled")
+    return len(reasons) == 0, reasons
 
 
 def _extract_canonical_content(url):
@@ -286,10 +287,11 @@ def _extract_canonical_content(url):
         text = _strip_html(extracted or "")
         title = _strip_html(metadata.title if metadata else "")
         article_result = {"title": title, "text": text}
-        if not _is_plausible_article(article_result):
+        is_plausible, reject_reasons = _is_plausible_article(article_result)
+        if not is_plausible:
             _log(
                 "WARN",
-                f"canonical scrape rejected for {url}: title_len={len(title)} text_len={len(text)}",
+                f"canonical scrape rejected for {url}: title_len={len(title)} text_len={len(text)} reasons={','.join(reject_reasons)}",
             )
             return result
         result["success"] = True
