@@ -11,6 +11,10 @@ import trafilatura
 import yaml
 
 
+def _log(level, message):
+    print(f"[{level}] {message}")
+
+
 class Config:
     DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://postgres:postgres@localhost:5432/app")
     TABLE_NAME = os.getenv("TABLE_NAME", "rss_articles")
@@ -146,7 +150,7 @@ class RSSJob:
                 if content_scraped:
                     title = _strip_html(content_scraped[:160])
                     content = content_scraped
-                article_language = _detect_language(f"{title} {content}")
+                article_language = "undefined"  # Default value; could be improved by detecting language if needed
 
                 with self.conn.cursor() as cur:
                     cur.execute(
@@ -227,17 +231,6 @@ def _strip_html(value):
     return re.sub(r"\s+", " ", cleaned).strip()
 
 
-def _detect_language(text):
-    sample = (text or "").lower()
-    if not sample:
-        return "en"
-    de_markers = (" der ", " die ", " und ", " ist ", " nicht ", " mit ", " auf ")
-    en_markers = (" the ", " and ", " is ", " not ", " with ", " for ", " on ")
-    de_score = sum(sample.count(marker) for marker in de_markers)
-    en_score = sum(sample.count(marker) for marker in en_markers)
-    return "de" if de_score >= en_score else "en"
-
-
 def _is_blocked_or_paywalled(text):
     haystack = (text or "").lower()
     phrases = (
@@ -273,14 +266,20 @@ def _is_plausible_article(result):
 def _extract_canonical_content(url):
     result = {"success": False, "content_scraped": None}
     if not url:
+        _log("WARN", "canonical scrape skipped: empty URL")
         return result
     try:
         response = requests.get(url, timeout=20, allow_redirects=True, headers={"User-Agent": "rss-scraper/1.0"})
         content_type = (response.headers.get("Content-Type") or "").lower()
-        if response.status_code >= 400 or "text/html" not in content_type:
+        if response.status_code >= 400:
+            _log("WARN", f"canonical scrape skipped for {url}: HTTP {response.status_code}")
             return result
-        downloaded = trafilatura.fetch_url(response.url)
+        if "text/html" not in content_type:
+            _log("WARN", f"canonical scrape skipped for {url}: non-HTML content-type '{content_type}'")
+            return result
+        downloaded = response.text
         if not downloaded:
+            _log("WARN", f"canonical scrape skipped for {url}: empty response body")
             return result
         extracted = trafilatura.extract(downloaded, include_comments=False, include_formatting=False)
         metadata = trafilatura.extract_metadata(downloaded)
@@ -288,16 +287,21 @@ def _extract_canonical_content(url):
         title = _strip_html(metadata.title if metadata else "")
         article_result = {"title": title, "text": text}
         if not _is_plausible_article(article_result):
+            _log(
+                "WARN",
+                f"canonical scrape rejected for {url}: title_len={len(title)} text_len={len(text)}",
+            )
             return result
         result["success"] = True
         result["content_scraped"] = text
+        _log("INFO", f"canonical scrape succeeded for {url}: chars={len(text)}")
         return result
     except Exception as exc:
-        print(f"[WARN] canonical scrape failed for {url}: {exc}")
+        _log("WARN", f"canonical scrape failed for {url}: {exc}")
         return result
 
 
-def article_from_entry(publisher, entry):
+def article_from_entry(publisher, entry, feed_language):
     link = entry.get("link") or entry.get("id") or ""
     if not link:
         return None
@@ -309,7 +313,7 @@ def article_from_entry(publisher, entry):
     content_value = entry.get("summary") or entry.get("summary_detail") or entry.get("content") or ""
     title = _text(entry.get("title") or "")
     content = _strip_html(_text(content_value))
-    article_language = _detect_language(f"{title} {content}")
+    article_language = feed_language if feed_language else "undefined"
     scraped = _extract_canonical_content(link)
     success = scraped["success"]
 
@@ -343,7 +347,7 @@ def main():
         # and updates: fetched_at, success, title, content, article_language, content_scraped.
         #
         # After the one-time run is done successfully, comment out or remove the next two lines.
-        one_off_cutoff = datetime(2026, 10, 12, tzinfo=timezone.utc)
+        one_off_cutoff = datetime(2026, 10, 13, tzinfo=timezone.utc)
         job.rescrape_and_update_articles_before(one_off_cutoff)
 
         for item in load_feeds(Config.FEEDS_FILE):
@@ -366,8 +370,10 @@ def main():
                 print(f"[WARN] malformed feed skipped: {feed_url}")
                 continue
 
+            feed_language = getattr(feed, "feed", {}).get("language") or "undefined"
+
             for entry in getattr(feed, "entries", []) or []:
-                article = article_from_entry(publisher, entry)
+                article = article_from_entry(publisher, entry, feed_language)
                 if not article:
                     print(f"[WARN] invalid entry skipped for feed: {feed_url}")
                     continue
